@@ -4,7 +4,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import norm
 
-# Configuración del dispositivo
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
 
@@ -16,18 +15,18 @@ class BlackScholesPINN(nn.Module):
         super(BlackScholesPINN, self).__init__()
         
         # Construir la red
-        self.layers = nn.ModuleList()
+        self.layers = nn.ModuleList() #lista especial de pytorch que registra las capas como parametros entrenables
         for i in range(len(layers) - 1):
             self.layers.append(nn.Linear(layers[i], layers[i+1]))
         
-        # Inicialización Xavier
+        # Inicialización Xavier: mantiene los pesos (W, y=Wx+b) con valores no tan extremos, los mantiene "justos"
         for layer in self.layers:
             nn.init.xavier_normal_(layer.weight)
             nn.init.zeros_(layer.bias)
     
     def forward(self, S, t):
         """
-        Forward pass
+        Forward pass. Recibe entradas y produce una salida 
         Input: S (precio del activo), t (tiempo)
         Output: V (precio de la opción)
         """
@@ -38,7 +37,7 @@ class BlackScholesPINN(nn.Module):
         for i in range(len(self.layers) - 1):
             x = torch.tanh(self.layers[i](x))
         
-        # Capa de salida (sin activación)
+        # Capa de salida (sin activación). No queremos alguna activación que pueda restringir el número real
         x = self.layers[-1](x)
         return x
 
@@ -62,7 +61,7 @@ class BlackScholesTrainer:
         # Para tracking
         self.losses = []
     
-    def payoff(self, S):
+    def payoff(self, S): #recompensa final al vencimiento de la opcion
         """Condición terminal (payoff)"""
         if self.option_type == 'call':
             return torch.maximum(S - self.K, torch.zeros_like(S))
@@ -94,7 +93,7 @@ class BlackScholesTrainer:
     
     def sample_points(self, n_interior, n_boundary, n_terminal):
         """
-        Genera puntos de entrenamiento
+        Genera puntos de entrenamiento aleatoriamente. PINN no entrena con otros datos mas que estos
         """
         S_min, S_max = self.S_range
         t_min, T = self.t_range
@@ -127,7 +126,7 @@ class BlackScholesTrainer:
         """
         # Loss de la PDE (interior)
         pde_residual = self.black_scholes_pde(S_int, t_int)
-        loss_pde = torch.mean(pde_residual**2)
+        loss_pde = torch.mean(pde_residual**2) #why pde_residual**2?
         
         # Loss de condición terminal
         V_term = self.model(S_term, t_term)
@@ -140,14 +139,14 @@ class BlackScholesTrainer:
         
         # Loss de frontera superior (S → ∞)
         V_bound_high = self.model(S_bound_high, t_bound_high)
-        # Para call: V ≈ S - K*exp(-r*(T-t))
+        # Para call: V ≈ S - K*exp(-r*(T-t)) 
         if self.option_type == 'call':
             V_expected = S_bound_high - self.K * torch.exp(-self.r * (self.t_range[1] - t_bound_high))
         else:
             V_expected = torch.zeros_like(V_bound_high)
         loss_bound_high = torch.mean((V_bound_high - V_expected)**2)
         
-        # Loss total con pesos
+        # Loss total con pesos. Explicacion completa de la loss function y su estructura
         total_loss = (loss_pde + 
                      10.0 * loss_terminal + 
                      1.0 * loss_bound_low + 
@@ -168,7 +167,7 @@ class BlackScholesTrainer:
             # Calcular loss
             total_loss, loss_pde, loss_term, loss_low, loss_high = self.loss_function(*points)
             
-            # Backpropagation
+            # Backpropagation. Necesaria para calcular cómo cambia la pérdida de los pesos en la red
             total_loss.backward()
             self.optimizer.step()
             
